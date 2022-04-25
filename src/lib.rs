@@ -3,7 +3,9 @@ compile_error!(
     "c'mon bro, you know you hate whatever os you are using -- why not use unix instead?"
 );
 
-use std::io::{self, Bytes, Read, Stdin, Stdout, Write};
+use std::io::{self, Read, Stdout, Write};
+use std::process;
+use std::sync::mpsc::{self, Receiver as Rx, Sender, TryRecvError};
 
 mod unix;
 pub use unix::*;
@@ -63,21 +65,47 @@ const PSR: usize = 9;
 const KBSR: u16 = 0xfe00;
 const KBDR: u16 = 0xfe02;
 const DSR: u16 = 0xfe04;
-const DBR: u16 = 0xfe06;
+const DDR: u16 = 0xfe06;
 const MCR: u16 = 0xfffe;
 
 const MEM: usize = u16::MAX as usize + 1;
 
+struct Interrupt {
+    vector: u16,
+    priority: u16,
+}
+
 pub struct Vm {
     mem: [u16; MEM],
     reg: [u16; 10],
+    status: [usize; 0x100],
     usp: u16,
-    inp: Bytes<Stdin>,
+    rx: (Rx<Interrupt>, Rx<u8>),
     out: Stdout,
 }
 
 impl Vm {
     pub fn new() -> Self {
+        use std::thread;
+
+        let (sx, rx) = mpsc::channel();
+        let (sx_stdin, rx_stdin) = mpsc::channel();
+
+        thread::spawn(move || {
+            let mut b = io::stdin().bytes();
+            let mut stop = false;
+
+            while !stop {
+                stop = sx_stdin.send(b.next().unwrap().unwrap()).is_err()
+                    || sx
+                        .send(Interrupt {
+                            vector: 0x80,
+                            priority: 4,
+                        })
+                        .is_err();
+            }
+        });
+
         let mut reg = [0; 10];
 
         reg[6] = KBSR;
@@ -89,11 +117,16 @@ impl Vm {
         mem[DSR as usize] = 1 << 15;
         mem[0xfffe] = 1 << 15;
 
+        let mut status = [0; 0x100];
+
+        status[0x80] = KBSR as usize;
+
         Self {
             usp: reg[6],
             mem,
             reg,
-            inp: io::stdin().bytes(),
+            status,
+            rx: (rx, rx_stdin),
             out: io::stdout(),
         }
     }
@@ -120,7 +153,7 @@ impl Vm {
     }
 
     pub fn run(&mut self) {
-        while self.mem[0xfffe] >> 15 > 0 {
+        while self.mem[MCR as usize] >> 15 > 0 {
             let (opcode, operand) = self.load_next_instr();
             let dr = operand >> 9;
             let sr = (operand >> 6) & 7;
@@ -228,6 +261,18 @@ impl Vm {
                     self.interrupt::<false>(0, 0x01);
                 }
             }
+
+            match self.rx.0.try_recv() {
+                Ok(Interrupt { priority, vector }) => {
+                    if priority & 7 > (self.reg[PSR] >> 8) & 0x7
+                        && self.mem[self.status[vector as usize & 0xff]] & 1 >> 14 > 0
+                    {
+                        self.interrupt::<true>(priority & 7, vector & 0xff);
+                    }
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(_disconnected) => process::exit(-1),
+            }
         }
     }
 
@@ -284,9 +329,9 @@ impl Vm {
     }
 
     fn store(&mut self, addr: u16, i: u16) {
-        if addr < KBSR || addr == MCR {
+        if addr <= KBSR || addr == MCR {
             self.mem[addr as usize] = i;
-        } else if addr == DBR {
+        } else if addr == DDR {
             self.out.write_all(&[i as u8]).unwrap();
             self.out.flush().unwrap();
         }
@@ -297,13 +342,18 @@ impl Vm {
             self.mem[addr as usize]
         } else {
             if addr == KBSR {
-                let available = check_key();
+                let available = self.rx.1.try_recv();
 
-                self.mem[KBSR as usize] = available << 15;
+                self.mem[KBSR as usize] = match available {
+                    Ok(x) => {
+                        self.mem[KBDR as usize] = x.into();
+                        1 << 15
+                    }
 
-                if available > 0 {
-                    self.mem[KBDR as usize] = self.inp.next().unwrap().unwrap().into();
-                }
+                    Err(TryRecvError::Empty) => 0,
+
+                    Err(_disconnected) => process::exit(-1),
+                };
             }
 
             self.mem[addr as usize]

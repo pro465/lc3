@@ -18,7 +18,7 @@ fn handle_signal(_signal: libc::c_int) {
 fn main() {
     let mut vm = Vm::new();
 
-    let one_img = false;
+    let mut one_img = false;
 
     for i in env::args().skip(1) {
         vm.load_image(&i);
