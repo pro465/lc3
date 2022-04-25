@@ -5,7 +5,7 @@ compile_error!(
 
 use std::io::{self, Read, Stdout, Write};
 use std::process;
-use std::sync::mpsc::{self, Receiver as Rx, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver as Rx, TryRecvError};
 
 mod unix;
 pub use unix::*;
