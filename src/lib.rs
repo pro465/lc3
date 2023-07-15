@@ -1,14 +1,6 @@
-#[cfg(not(unix))]
-compile_error!(
-    "c'mon bro, you know you hate whatever os you are using -- why not use unix instead?"
-);
-
 use std::io::{self, Read, Stdout, Write};
 use std::process;
 use std::sync::mpsc::{self, Receiver as Rx, TryRecvError};
-
-mod unix;
-pub use unix::*;
 
 #[repr(usize)]
 #[derive(Debug, Clone, Copy)]

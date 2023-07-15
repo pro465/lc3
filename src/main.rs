@@ -1,3 +1,4 @@
+use crossterm::terminal;
 use lc3::*;
 use std::env;
 
@@ -5,12 +6,12 @@ struct Term;
 
 impl Drop for Term {
     fn drop(&mut self) {
-        restore_input_buffering();
+        terminal::disable_raw_mode().expect("could not disable raw mode");
     }
 }
 
 fn handle_signal(_signal: libc::c_int) {
-    restore_input_buffering();
+    terminal::disable_raw_mode().expect("could not disable raw mode");
     println!();
     std::process::exit(-2);
 }
@@ -26,11 +27,11 @@ fn main() {
     }
 
     if !one_img {
-        println!("usage: lc3 [psth] ...");
+        println!("usage: lc3 (path)+");
         return;
     }
 
-    disable_input_buffering();
+    terminal::enable_raw_mode().expect("could not enable raw mode");
 
     let term = Term;
 
